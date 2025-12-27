@@ -1,0 +1,515 @@
+#include <random>
+#include <iostream>
+#include <fstream>
+#include <queue>
+#include <sstream>
+#include <omp.h>
+#include <vector>
+#include <cstdlib>
+
+using std::ofstream;
+using std::cout;
+using std::min;
+using std::pair;
+using std::queue;
+using std::uniform_int_distribution;
+using std::mt19937;
+using std::random_device;
+
+// --------- Global timing variables ---------
+double create_time       = 0.0;
+double impassible_time   = 0.0;
+double output_int_time   = 0.0;
+double output_char_time  = 0.0;
+double print_int_time    = 0.0;
+double print_char_time   = 0.0;
+double wave_time         = 0.0;
+double path_time         = 0.0;
+
+// function declarations
+void PrintEnvironment(int** array, int width, int height);
+int** impassible2DArray(int** array, int height, int width, int impassible);
+int** create2DArray(int height, int width);
+bool isValid(int** array, int x, int y, int height, int width);
+void wave(int** array, int xGoal, int yGoal, int width, int height);
+char** path(int** array, int width, int height, int startX, int startY);
+void PrintCharEnvironment(char** array, int width, int height);
+bool isValidChar(int** array, int x, int y, int height, int width);
+void outputMatrix(int** array, int width, int height, ofstream& outFile);
+void outputMatrixChar(char** array, int width, int height, ofstream& outFile);
+
+int main(int argc, char** argv) {
+  if (argc == 1) {
+
+    int width;
+    int height;
+
+    printf("Welcome to CSE240 WaveFront Pather\n\nPlease tell me about the grid you want to generate.\nEnter the width (at least 10): ");
+    scanf("%d", &width);
+    while (width < 10) {
+      printf("Please enter a width of at least 10: ");
+      scanf("%d",&width);
+    }
+
+    printf("Enter the height (at least 10): ");
+    scanf("%d", &height);
+    while (height < 10) {
+      printf("Please enter a height of at least 10: ");
+      scanf("%d",&height);
+    }
+
+    int** my2DArray = create2DArray(height, width);
+
+    int impassible;
+    printf("Enter the percent of impassible terrain (0 - 100): ");
+    scanf("%d", &impassible);
+
+    if (impassible > 40) {
+      char prompt;
+      printf("Having a value greater than 40 percent might create poor results, do you with to continue? (y/n): ");
+      scanf(" %c", &prompt);
+
+      while (prompt != 'y' && prompt != 'n') {
+        printf("Having a value greater than 40 percent might create poor results, do you with to continue? (y/n): ");
+        scanf(" %c", &prompt);
+      }
+      if (prompt == 'n') {
+        printf("Enter the percent of impassible terrain (0 – 100): ");
+        scanf("%d", &impassible);
+      }
+    }
+
+    int impassibleNum = impassible/100.0 * width * height;
+
+    my2DArray = impassible2DArray(my2DArray, height, width, impassibleNum);
+
+    PrintEnvironment(my2DArray, width, height);
+
+    ofstream outFile("wave.txt");
+    if (outFile) outputMatrix(my2DArray, width, height, outFile);
+
+    int xGoal, yGoal;
+    bool invalid = true;
+
+    while (invalid) {
+      printf("Please enter the Goal Position X: ");
+      scanf("%d", &xGoal);
+      printf("Please enter the Goal Position Y: ");
+      scanf("%d", &yGoal);
+
+      if (xGoal < 0 || xGoal >= width)
+        printf("Sorry, the X position is out of bounds\n");
+      else if (yGoal < 0 || yGoal >= height)
+        printf("Sorry, the Y position is out of bounds\n");
+      else if (my2DArray[yGoal][xGoal] == -1)
+        printf("Sorry, that position is inside an obstacle\n");
+      else
+        invalid = false;
+    }
+
+    my2DArray[yGoal][xGoal] = 1;
+
+    wave(my2DArray, yGoal, xGoal, width, height);
+
+    int startX, startY;
+    invalid = true;
+
+    while (invalid) {
+      printf("Please enter the Start Position X: ");
+      scanf("%d", &startX);
+      printf("Please enter the Start Position Y: ");
+      scanf("%d", &startY);
+
+      if (startX < 0 || startX >= width)
+        printf("Sorry, the X position is out of bounds\n");
+      else if (startY < 0 || startY >= height)
+        printf("Sorry, that position is inside an obstacle/unreachable\n");
+      else if (my2DArray[startY][startX] <= 0)
+        printf("Sorry, that position is inside an obstacle/unreachable\n");
+      else
+        invalid = false;
+    }
+
+    char** myCharArray = path(my2DArray, width, height, startY, startX);
+
+    PrintCharEnvironment(myCharArray, width, height);
+
+    if (outFile) outputMatrixChar(myCharArray, width, height, outFile);
+
+    outFile.close();
+
+    // --------- Print timing summary ---------
+    printf("\nTiming summary (seconds):\n");
+    printf(" create2DArray       : %f\n", create_time);
+    printf(" impassible2DArray   : %f\n", impassible_time);
+    printf(" outputMatrix (int)  : %f\n", output_int_time);
+    printf(" outputMatrixChar    : %f\n", output_char_time);
+    printf(" PrintEnvironment    : %f\n", print_int_time);
+    printf(" PrintCharEnvironment: %f\n", print_char_time);
+    printf(" wave (BFS)          : %f\n", wave_time);
+    printf(" path (backtracking) : %f\n", path_time);
+
+  } else {
+    printf("INVALID ARGUMENTS\nSyntax: <exe>");
+  }
+
+  return 0;
+}
+
+
+// ------------------ CREATE ARRAY -------------------
+int** create2DArray(int height, int width) {
+  double start3 = omp_get_wtime();
+
+  int** array2D = new int*[height];
+
+  #pragma omp parallel for schedule (static)
+  for (int h = 0; h < height; h++) {
+    array2D[h] = new int[width];
+    for (int w = 0; w < width; w++)
+      array2D[h][w] = 0;
+  }
+
+  double end3 = omp_get_wtime();
+  #pragma omp critical
+  {
+    create_time += end3 - start3;
+  }
+
+  return array2D;
+}
+
+
+// ------------------ OUTPUT INT MATRIX -------------------
+void outputMatrix(int** array, int width, int height, ofstream& outFile) {
+  double start3 = omp_get_wtime();
+
+  #pragma omp parallel for ordered schedule (static)
+  for (int h = 0; h < height; h++) {
+    std::stringstream rowStream;
+
+    for (int w = 0; w < width; w++) {
+      if (array[h][w] == 0)
+        rowStream << " " << array[h][w] << " \n"[w == width-1];
+      else
+        rowStream << array[h][w] << " \n"[w == width-1];
+    }
+
+    #pragma omp ordered
+    outFile << rowStream.str();
+  }
+  outFile << "\n\n";
+
+  double end3 = omp_get_wtime();
+  #pragma omp critical
+  {
+    output_int_time += end3 - start3;
+  }
+}
+
+
+// ------------------ OUTPUT CHAR MATRIX -------------------
+void outputMatrixChar(char** array, int width, int height, ofstream& outFile) {
+  double start3 = omp_get_wtime();
+
+  #pragma omp parallel for ordered schedule (static)
+  for (int h = 0; h < height; h++) {
+    std::stringstream rowStream;
+    for (int w = 0; w < width; w++)
+      rowStream << array[h][w] << " \n"[w == width-1];
+
+    #pragma omp ordered
+    outFile << rowStream.str();
+  }
+
+  double end3 = omp_get_wtime();
+  #pragma omp critical
+  {
+    output_char_time += end3 - start3;
+  }
+}
+
+
+// ------------------ impassible2DArray (atomic + safe RNG) -------------------
+int** impassible2DArray(int** array, int height, int width, int impassible) {
+  double start3 = omp_get_wtime();
+
+  while (true) {
+
+    int remaining;
+    #pragma omp atomic read
+    remaining = impassible;
+
+    if (remaining <= 0) break;
+
+    #pragma omp parallel
+    {
+      int tid = omp_get_thread_num();
+      std::mt19937 rng(1234 + tid);
+      std::uniform_int_distribution<int> dist3(0, 2);
+
+      #pragma omp for schedule (static)
+      for (int h = 0; h < height; h++) {
+        for (int w = 0; w < width; w++) {
+
+          int left;
+          #pragma omp atomic read
+          left = impassible;
+          if (left <= 0) continue;
+
+          if (array[h][w] == 0 && dist3(rng) == 0) {
+
+            int before;
+            #pragma omp atomic capture
+            { before = impassible; impassible = impassible - 1; }
+
+            if (before > 0) {
+              array[h][w] = -1;
+            } else {
+              #pragma omp atomic
+              impassible++;
+            }
+          }
+        }
+      }
+    }
+  }
+
+  double end3 = omp_get_wtime();
+  #pragma omp critical
+  {
+    impassible_time += end3 - start3;
+  }
+
+  return array;
+}
+
+
+// ------------------ PRINT INT MATRIX -------------------
+void PrintEnvironment(int** array, int width, int height) {
+  double start3 = omp_get_wtime();
+
+  #pragma omp parallel for ordered schedule (static)
+  for (int h = 0; h < height; h++) {
+    std::stringstream rowStream;
+    for (int w = 0; w < width; w++) {
+      if (array[h][w] > -1 && array[h][w] < 10)
+        rowStream << " " << array[h][w] << " \n"[w == width-1];
+      else
+        rowStream << array[h][w] << " \n"[w == width-1];
+    }
+
+    #pragma omp ordered
+    std::cout << rowStream.str();
+  }
+
+  double end3 = omp_get_wtime();
+  #pragma omp critical
+  {
+    print_int_time += end3 - start3;
+  }
+}
+
+
+// ------------------ PRINT CHAR MATRIX -------------------
+void PrintCharEnvironment(char** array, int width, int height) {
+  double start3 = omp_get_wtime();
+
+  #pragma omp parallel for ordered schedule (static)
+  for (int h = 0; h < height; h++) {
+    std::stringstream rowStream;
+    for (int w = 0; w < width; w++)
+      rowStream << array[h][w] << " \n"[w == width-1];
+
+    #pragma omp ordered
+    std::cout << rowStream.str();
+  }
+
+  double end3 = omp_get_wtime();
+  #pragma omp critical
+  {
+    print_char_time += end3 - start3;
+  }
+}
+
+
+// ------------------ VALID INT -------------------
+bool isValid(int** array, int x, int y, int height, int width) {
+  if (x < 0 || y < 0 || y >= width || x >= height)
+    return false;
+  return array[x][y] == 0;
+}
+
+
+// ------------------ PARALLEL BFS -------------------
+void wave(int** array, int xGoal, int yGoal, int width, int height) {
+  double start3 = omp_get_wtime();
+
+  std::vector<std::pair<int,int>> current_frontier;
+  std::vector<std::pair<int,int>> next_frontier;
+
+  current_frontier.push_back({xGoal, yGoal});
+
+  int dRow[] = { -1, 0, 1, 0 };
+  int dCol[] = { 0, 1, 0, -1 };
+
+  while (!current_frontier.empty()) {
+
+    next_frontier.clear();
+
+    #pragma omp parallel
+    {
+      std::vector<std::pair<int,int>> local_next;
+
+      #pragma omp for nowait schedule (static)
+      for (int idx = 0; idx < (int)current_frontier.size(); idx++) {
+        int x = current_frontier[idx].first;
+        int y = current_frontier[idx].second;
+
+        for (int i = 0; i < 4; i++) {
+          int adjx = x + dRow[i];
+          int adjy = y + dCol[i];
+
+          if (adjx >= 0 && adjx < height && adjy >= 0 && adjy < width) {
+
+            bool visit = false;
+
+            #pragma omp critical
+            {
+              if (array[adjx][adjy] == 0) {
+                array[adjx][adjy] = array[x][y] + 1;
+                visit = true;
+              }
+            }
+
+            if (visit)
+              local_next.push_back({adjx, adjy});
+          }
+        }
+      }
+
+      #pragma omp critical
+      next_frontier.insert(next_frontier.end(),
+                           local_next.begin(), local_next.end());
+    }
+
+    current_frontier.swap(next_frontier);
+  }
+
+  PrintEnvironment(array, width, height);
+
+  double end3 = omp_get_wtime();
+  #pragma omp critical
+  {
+    wave_time += end3 - start3;
+  }
+}
+
+
+// ------------------ PATH (sequential) -------------------
+char** path(int** array, int width, int height, int startX, int startY) {
+  double start3 = omp_get_wtime();
+
+  char** array2D = new char*[height];
+
+  #pragma omp parallel for schedule (static)
+  for (int h = 0; h < height; h++) {
+    array2D[h] = new char[width];
+    for (int w = 0; w < width; w++) {
+      if (array[h][w] == -1)
+        array2D[h][w] = '#';
+      else if (array[h][w] == 1)
+        array2D[h][w] = '$';
+      else if (startX == h && startY == w)
+        array2D[h][w] = '@';
+      else
+        array2D[h][w] = ' ';
+    }
+  }
+
+  queue<pair<int,int>> q;
+
+  while (true) {
+
+    if (isValidChar(array, startX+1, startY+1, height, width)) {
+      q.push({startX+1, startY+1});
+      if (array2D[startX+1][startY+1] == '$') break;
+    }
+    if (isValidChar(array, startX+1, startY, height, width)) {
+      q.push({startX+1, startY});
+      if (array2D[startX+1][startY] == '$') break;
+    }
+    if (isValidChar(array, startX+1, startY-1, height, width)) {
+      q.push({startX+1, startY-1});
+      if (array2D[startX+1][startY-1] == '$') break;
+    }
+    if (isValidChar(array, startX, startY-1, height, width)) {
+      q.push({startX, startY-1});
+      if (array2D[startX][startY-1] == '$') break;
+    }
+    if (isValidChar(array, startX-1, startY-1, height, width)) {
+      q.push({startX-1, startY-1});
+      if (array2D[startX-1][startY-1] == '$') break;
+    }
+    if (isValidChar(array, startX-1, startY, height, width)) {
+      q.push({startX-1, startY});
+      if (array2D[startX-1][startY] == '$') break;
+    }
+    if (isValidChar(array, startX-1, startY+1, height, width)) {
+      q.push({startX-1, startY+1});
+      if (array2D[startX-1][startY+1] == '$') break;
+    }
+    if (isValidChar(array, startX, startY+1, height, width)) {
+      q.push({startX, startY+1});
+      if (array2D[startX][startY+1] == '$') break;
+    }
+
+    if (q.empty()) {
+      printf("No path was found");
+      double end3_fail = omp_get_wtime();
+      #pragma omp critical
+      {
+        path_time += end3_fail - start3;
+      }
+      exit(0);
+    }
+
+    int bestX = q.front().first;
+    int bestY = q.front().second;
+    q.pop();
+
+    int bestValue = array[bestX][bestY];
+
+    while (!q.empty()) {
+      auto [x, y] = q.front();
+      q.pop();
+      if (array[x][y] < bestValue) {
+        bestValue = array[x][y];
+        bestX = x;
+        bestY = y;
+      }
+    }
+
+    array2D[bestX][bestY] = '*';
+    startX = bestX;
+    startY = bestY;
+  }
+
+  double end3 = omp_get_wtime();
+  #pragma omp critical
+  {
+    path_time += end3 - start3;
+  }
+
+  return array2D;
+}
+
+
+// ------------------ VALID CHAR -------------------
+bool isValidChar(int** array, int x, int y, int height, int width) {
+  if (x < 0 || y < 0 || y >= width || x >= height)
+    return false;
+  if (array[x][y] <= 0)
+    return false;
+  return true;
+}
